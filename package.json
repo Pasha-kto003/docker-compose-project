@@ -1,0 +1,14 @@
+{
+  "name": "docker-compose-project",
+  "version": "1.0.0",
+  "description": "Multi-container app with Node.js, Redis, PostgreSQL",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "redis": "^4.6.7",
+    "pg": "^8.11.0"
+  }
+}

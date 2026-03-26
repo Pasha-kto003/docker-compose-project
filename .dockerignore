@@ -1,0 +1,26 @@
+# Файлы окружения и секреты
+.env
+.env.*
+!.env.example
+*.env
+
+# Зависимости
+node_modules
+npm-debug.log
+
+# Логи и временные файлы
+*.log
+temp/
+tmp/
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+Dockerfile
+docker-compose*.yml
