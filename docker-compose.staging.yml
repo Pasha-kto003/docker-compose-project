@@ -1,0 +1,115 @@
+# ==========================================
+# Docker Compose - Staging Environment
+# ==========================================
+# Назначение: Тестирование перед продакшеном
+# Особенности:
+# - Конфигурация близка к production
+# - Ограничения ресурсов
+# - Отдельные порты (не конфликтуют с prod)
+# - Умеренное логирование
+
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: myapp-staging-web
+    ports:
+      - "3001:3000"  # Отличный от production порт
+    environment:
+      - NODE_ENV=staging
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_HOST=postgres
+      - DB_USER=staging_user
+      - DB_PASSWORD_FILE=/run/secrets/staging_db_password
+      - DB_NAME=myapp_staging
+      - DB_PORT=5432
+    secrets:
+      - staging_db_password
+      - staging_api_key
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - staging-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - postgres
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  redis:
+    image: redis:alpine
+    container_name: myapp-staging-redis
+    volumes:
+      - redis-staging:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - staging-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: myapp-staging-postgres
+    environment:
+      POSTGRES_USER: staging_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/staging_db_password
+      POSTGRES_DB: myapp_staging
+    volumes:
+      - postgres-staging:/var/lib/postgresql/data
+    secrets:
+      - staging_db_password
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"
+        max-file: "7"
+    networks:
+      - staging-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U staging_user -d myapp_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+volumes:
+  redis-staging:
+  postgres-staging:
+
+networks:
+  staging-network:
+    driver: bridge
+
+secrets:
+  staging_db_password:
+    external: true
+  staging_api_key:
+    external: true

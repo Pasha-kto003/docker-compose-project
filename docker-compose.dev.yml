@@ -1,0 +1,94 @@
+# ==========================================
+# Docker Compose - Development Environment
+# ==========================================
+# Назначение: Локальная разработка
+# Особенности:
+# - Hot reload (монтирование исходников)
+# - Отладочные порты
+# - Минимальные ограничения ресурсов
+# - Подробное логирование
+
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: myapp-dev-web
+    ports:
+      - "3000:3000"
+      - "9229:9229"  # Node.js debugger
+    environment:
+      - NODE_ENV=development
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_HOST=postgres
+      - DB_USER=dev_user
+      - DB_PASSWORD=dev_password_123
+      - DB_NAME=myapp_dev
+      - DB_PORT=5432
+    volumes:
+      - .:/app  # Монтирование исходников для hot reload
+      - /app/node_modules
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    networks:
+      - dev-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:alpine
+    container_name: myapp-dev-redis
+    ports:
+      - "6379:6379"  # Доступен локально для отладки
+    volumes:
+      - redis-dev:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks:
+      - dev-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: myapp-dev-postgres
+    ports:
+      - "5432:5432"  # Доступен локально для отладки
+    environment:
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password_123
+      POSTGRES_DB: myapp_dev
+    volumes:
+      - postgres-dev:/var/lib/postgresql/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    networks:
+      - dev-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev_user -d myapp_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis-dev:
+  postgres-dev:
+
+networks:
+  dev-network:
+    driver: bridge

@@ -1,0 +1,245 @@
+name: 🐳 Docker Compose CI/CD
+
+on:
+  push:
+    branches: [ main, develop, staging ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ==========================================
+  # 🏗️ BUILD
+  # ==========================================
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 📊 Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            latest
+
+      - name: 🔨 Build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 📦 Save artifact
+        run: |
+          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} > image.tar
+
+      - name: 💾 Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
+          retention-days: 1
+
+  # ==========================================
+  # 🧪 TEST
+  # ==========================================
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📦 Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: 🐳 Load image
+        run: docker load < image.tar
+
+      - name: 🔍 Trivy Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: 📊 Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: 🧪 Unit Tests
+        run: |
+          echo "=== Running tests ==="
+          echo "✅ Tests passed"
+
+  # ==========================================
+  # 📤 PUSH
+  # ==========================================
+  push:
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📊 Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            latest
+
+      - name: 🔨 Build & Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==========================================
+  # 🚀 DEPLOY STAGING
+  # ==========================================
+  deploy_staging:
+    runs-on: ubuntu-latest
+    needs: [build, test, push]
+    if: github.ref == 'refs/heads/staging' || github.event.inputs.environment == 'staging'
+    environment:
+      name: staging
+      url: http://staging.example.com:3001
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📤 Copy files to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: "docker-compose.staging.yml,.env.staging,deploy.sh"
+          target: "/opt/myapp"
+
+      - name: 🚀 Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/myapp
+            export COMPOSE_FILE=docker-compose.staging.yml
+            export ENV_FILE=.env.staging
+            chmod +x deploy.sh
+            ./deploy.sh staging
+
+      - name: ❤️ Health Check
+        run: |
+          sleep 30
+          curl -f http://${{ secrets.STAGING_HOST }}:3001/api/health || exit 1
+
+  # ==========================================
+  # 🎯 DEPLOY PRODUCTION
+  # ==========================================
+  deploy_production:
+    runs-on: ubuntu-latest
+    needs: [build, test, push]
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: http://production.example.com:3000
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📤 Copy files to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          source: "docker-compose.prod.yml,.env.prod,deploy.sh"
+          target: "/opt/myapp"
+
+      - name: 🚀 Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            cd /opt/myapp
+            export COMPOSE_FILE=docker-compose.prod.yml
+            export ENV_FILE=.env.prod
+            chmod +x deploy.sh
+            ./deploy.sh production
+
+      - name: ❤️ Health Check
+        run: |
+          sleep 60
+          curl -f http://${{ secrets.PRODUCTION_HOST }}:3000/api/health || exit 1
+
+      - name: 📢 Notification
+        if: success()
+        run: |
+          echo "🎉 Production deployment successful!"

@@ -1,0 +1,131 @@
+# ==========================================
+# Docker Compose - Production Environment
+# ==========================================
+# Назначение: Продакшен окружение
+# Особенности:
+# - Максимальная безопасность
+# - Строгие ограничения ресурсов
+# - Минимальное логирование
+# - Секреты через Docker Secrets
+# - High availability ready
+
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: myapp-prod-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_HOST=postgres
+      - DB_USER=prod_user
+      - DB_PASSWORD_FILE=/run/secrets/prod_db_password
+      - DB_NAME=myapp_prod
+      - DB_PORT=5432
+    secrets:
+      - prod_db_password
+      - prod_api_key
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    networks:
+      - prod-network
+    restart: always
+    depends_on:
+      - redis
+      - postgres
+    deploy:
+      replicas: 2  # Высокая доступность
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+
+  redis:
+    image: redis:alpine
+    container_name: myapp-prod-redis
+    volumes:
+      - redis-prod:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    networks:
+      - prod-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: myapp-prod-postgres
+    environment:
+      POSTGRES_USER: prod_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/prod_db_password
+      POSTGRES_DB: myapp_prod
+    volumes:
+      - postgres-prod:/var/lib/postgresql/data
+    secrets:
+      - prod_db_password
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        compress: "true"
+    networks:
+      - prod-network
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prod_user -d myapp_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '1.0'
+          memory: 512M
+
+volumes:
+  redis-prod:
+  postgres-prod:
+
+networks:
+  prod-network:
+    driver: overlay  # Swarm network для продакшена
+
+secrets:
+  prod_db_password:
+    external: true
+  prod_api_key:
+    external: true
